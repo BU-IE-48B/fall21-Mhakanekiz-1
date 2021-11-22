@@ -1,0 +1,281 @@
+---
+title: "HW2"
+author: "Hakan Ekiz - IE48B - Fall2021"
+date: "22 Kasım 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# HW2
+
+## Introduction
+
+In this study, we will work with the GBF Training dataset. With the 1D Fused method, we will work on the Regression method and then compare them. In the 1D Fused method, we will try to establish the best model by finding the best lambda values for the time series in our dataset. In the regression tree method, we will find the optimal "maxdepth" number.
+
+
+
+```{r, include=FALSE}
+require(data.table)
+require(ggplot2)
+require(repr)
+require(rpart)
+require(rattle)
+require(TSrepr)
+require(zoo)
+require(genlasso)
+```
+
+## Data
+
+First of all, we take our GBFTrain dataset as a data table and then we make the necessary manipulations to make it suitable for timeseries studies.
+
+```{r}
+
+options(repr.plot.width=15, repr.plot.height=8)
+current_folder=getwd()
+dataset='CBF'
+
+train_data_path=sprintf('%s/CBFData/%s_TRAIN.txt',current_folder,dataset)
+train_data=fread(train_data_path)
+
+
+```
+ "C:/Users/Z0047JBE/Desktop/DERSLER SON/IE48B/HW2"
+
+```{r}
+setnames(train_data,'V1','class')
+train_data=train_data[order(class)]
+train_data[,class:=as.character(class)]
+train_data[,id:=1:.N]
+
+```
+
+
+```{r}
+long_train=melt(train_data,id.vars=c('id','class'))
+#head(long_train)
+long_train[,time:=as.numeric(gsub("\\D", "", variable))-1]
+#long_train
+long_train=long_train[,list(id,class,time,value)]
+long_train=long_train[order(id,time)]
+head(long_train)
+
+
+```
+
+
+We have 2 data sets that we will use for modeling and then use for comparisons, we will continue with the methods after plotting the data set we have once and looking at the situation.
+
+
+
+```{r , echo=FALSE}
+
+ggplot(long_train, aes(time,value)) + geom_line(aes(color=as.character(id))) +
+     facet_wrap(~class)
+
+```
+
+
+# 1D Fused Lasso
+
+
+We will use this package by downloading the genlasso package for the 1D Fused Lasso method. Here we will use k=10 for the penalty value. Let's do a test for our values with id=1 before applying it to the entire dataset.
+
+
+```{r}
+
+out1 = fusedlasso1d(as.numeric(train_data[id==1, 2:129]))
+
+cv1 = cv.trendfilter(out1, k = 10)
+
+lambda = cv1$lambda
+error = cv1$err
+df = data.table(lambda,error)
+df[,id:=1:.N]
+df
+```
+
+
+To check lambda values and min error values, let's do the same for values with id=2.
+
+```{r}
+out2 = fusedlasso1d(as.numeric(train_data[id==2, 2:129]))
+
+cv2 = cv.trendfilter(out2, k = 10)
+
+lambda = cv2$lambda
+error = cv2$err
+df2 = data.table(lambda,error)
+df2[,id:=1:.N]
+df2
+```
+
+
+
+```{r}
+a = cv1$lambda.min
+plot(out1, lambda = a)
+
+```
+
+
+After the necessary evaluations and trials, we now have to apply this for all id values with a for loop.
+
+
+
+```{r}
+out = vector()
+lamb = vector()
+fit = vector()
+
+
+
+for (i in c(1:30)) {
+  outt = fusedlasso1d(as.numeric(train_data[id==i, 2:129]))
+  out[i]= outt
+  cvv = cv.trendfilter(outt, k = 10)
+  lamb[i] = cvv$lambda.min
+  fit[(128*i-127):(128*i)] = outt$fit[,match(lamb[i], outt$lambda)]
+  
+  
+  #c = cvv$lambda.min
+  #plot(outt, lambda=c)
+
+}
+
+```
+
+
+
+```{r}
+dfall = data.table(lamb)
+dfall[,id:=1:.N]
+dfall
+
+```
+
+
+
+# Reg Tree
+
+As the other method, we will apply the regression tree method. Here we will use minsplit=20, minbucket=10 and cp=0. We need to find the maxdepth number and the optimal maxdepth numbers for our values and create trees accordingly.
+
+```{r}
+selected_dt=long_train[id==1]
+
+tree1=rpart(value~time,selected_dt,control=rpart.control(minsplit=20, minbucket = 10, cp=0, maxdepth=4))
+
+fancyRpartPlot(tree1)
+```
+
+```{r}
+
+tree1$cptable
+
+```
+
+
+
+```{r}
+require(e1071)
+
+depth = vector()
+pred = vector()
+
+ranges <- list(minsplit=20, cp=0, minbucket=10, maxdepth=1:30)
+
+
+for (i in 1:30) {
+  deep <- tune(rpart, value~time, data=long_train[id==i], ranges=ranges)
+
+  depth[i] = deep$best.parameters[,4]
+  
+  treett = rpart(value~time, long_train[id==i], control=rpart.control(minsplit=20, minbucket=10, cp=0, maxdepth=depth[i]))
+  predi = predict(treett,long=train[id==i])
+  pred[(128*i-127):(128*i)] = predi
+}
+
+```
+
+
+```{r}
+
+dfdepth = data.table(depth)
+dfdepth[,id:=1:.N]
+dfdepth
+
+
+```
+
+
+We currently know the optimal maxdepth numbers for each id, so we can also inspect one by one by creating trees for each value we want to see. 
+Example for id=16:
+
+
+```{r}
+selected_dt=long_train[id==16]
+
+tree16=rpart(value~time,selected_dt,control=rpart.control(minsplit=20, minbucket = 10, cp=0, maxdepth=5))
+
+fancyRpartPlot(tree16)
+```
+
+
+```{r}
+selected_dt[,tree_rep:=predict(tree16,selected_dt)]
+
+data_plot=melt(selected_dt,id.vars='time',measure.vars=c('value','tree_rep'))
+
+ggplot(data_plot,aes(x=time,y=value,color=variable))+
+    geom_line()
+```
+
+# Comp
+
+
+We will compare the estimates we made with the above two methods with the real values by noticing them.
+
+```{r}
+long_train[, lasso := t(fit)]
+long_train[, tree:= t(pred)]
+long_train
+```
+
+```{r}
+msetree = vector()
+mselasso = vector()
+
+for (i in 1:30) {
+  
+  msetree[i] <- mean((long_train[id==i]$value - long_train[id==i]$tree)^2)
+  mselasso[i] <- mean((long_train[id==i]$value - long_train[id==i]$lasso)^2)
+  
+}
+
+
+```
+
+
+
+```{r}
+
+dfcomp = data.table(mselasso,msetree)
+dfcomp[,id:=1:.N]
+dfcomp
+
+```
+
+When we examine the MSE values in the table, we can see that the estimations we made with the 1D Fused Lasso method have lower MSE values than the Regression Tree. As a result, we can say that we generally make closer estimations with the 1D Fused Lasso method.
+
+
+
+
+
+
+
+
+
+
