@@ -1,0 +1,487 @@
+---
+title: "HW3-Plane"
+author: "Hakan Ekiz - IE48B - Fall2021"
+date: "13 Aralık 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Homework Information
+
+### Representations
+
+1- Raw
+2- Difference
+3- Piecewise Aggregate Approximation (segmenth length=12)
+4- Piecewise Lnear Approximation
+5- Tree (maxdepth=12)
+
+### Distance Measurements
+
+1- Euclidian
+2- DTW (Windows size=10)
+3- DTW (Window size=20)
+4- ERP
+
+### K nn classifiers
+
+1- k=1
+2- k=3
+3- k=5
+
+### Datasets
+
+1- ECG200
+2- Plane
+3- SyntheticControl
+4- Trace
+5- SmoothSubspace
+
+Note: Since it takes time to run 5 different datasets in the same file and convert them to reports, 5 different files will be loaded for 5 different datasets.
+
+
+
+## Libraries and Functions
+
+```{r, message=FALSE}
+require(data.table)
+require(ggplot2)
+require(repr)
+require(rpart)
+require(rattle)
+require(TSrepr)
+require(TSdist)
+require(dtw)
+require(zoo)
+require(genlasso)
+require(e1071)
+```
+
+```{r}
+options(repr.plot.width=15, repr.plot.height=8)
+```
+
+
+```{r}
+nn_classify_cv=function(dist_matrix,train_class,test_indices,k=1){
+    
+    test_distances_to_train=dist_matrix[test_indices,]
+    test_distances_to_train=test_distances_to_train[,-test_indices]
+    train_class=train_class[-test_indices]
+    #print(str(test_distances_to_train))
+    ordered_indices=apply(test_distances_to_train,1,order)
+    if(k==1){
+        nearest_class=as.numeric(trainclass[as.numeric(ordered_indices[1,])])
+        nearest_class=data.table(id=test_indices,nearest_class)
+    } else {
+        nearest_class=apply(ordered_indices[1:k,],2,function(x) {trainclass[x]})
+        nearest_class=data.table(id=test_indices,t(nearest_class))
+    }
+    
+    long_nn_class=melt(nearest_class,'id')
+
+    class_counts=long_nn_class[,.N,list(id,value)]
+    class_counts[,predicted_prob:=N/k]
+    wide_class_prob_predictions=dcast(class_counts,id~value,value.var='predicted_prob')
+    wide_class_prob_predictions[is.na(wide_class_prob_predictions)]=0
+    class_predictions=class_counts[,list(predicted=value[which.max(N)]),by=list(id)]
+    
+    
+    return(list(prediction=class_predictions,prob_estimates=wide_class_prob_predictions))
+    
+}
+```
+
+# Plane
+
+## Data 
+
+Train Size=105
+TestSize=105
+Length=144
+Number of Class=7
+
+
+```{r}
+current_folder=getwd()
+dataset='Plane'
+main_path=sprintf('%s/ClassificationData/%s/%s',current_folder,dataset,dataset)
+
+dist_path=sprintf('%s/ClassificationData/%s/distances/%s',current_folder,dataset,dataset)
+
+train_data_path=sprintf('%s_TRAIN.txt',main_path)
+traindata=as.matrix(fread(train_data_path))
+
+test_data_path=sprintf('%s_TEST.txt',main_path)
+testdata=as.matrix(fread(test_data_path))
+
+#first column is the class variable
+trainclass=traindata[,1] # takes -1 and 1
+testclass=testdata[,1] # takes -1 and 1
+
+#drop first column
+traindata=traindata[,2:ncol(traindata)]
+testdata=testdata[,2:ncol(testdata)]
+
+# instance characteristics
+tlength=ncol(traindata)
+n_series_train=nrow(traindata)
+n_series_test=nrow(testdata)
+```
+
+
+```{r}
+head(data.table(traindata))
+
+```
+
+
+```{r}
+dt_ts_train=data.table(traindata)
+dt_ts_train[,id:=1:.N]
+long_train=melt(dt_ts_train,id.vars=c('id'))
+long_train[,time:=as.numeric(gsub("\\D", "", variable))-1]
+long_train=long_train[order(id,time)]
+long_train[,diff_series:=value-shift(value,1),by=list(id)]
+head(long_train)
+head(dt_ts_train)
+
+```
+
+```{r}
+
+dt_ts_test=data.table(testdata)
+dt_ts_test[,id:=1:.N]
+long_test=melt(dt_ts_test,id.vars=c('id'))
+long_test[,time:=as.numeric(gsub("\\D", "", variable))-1]
+long_test=long_test[order(id,time)]
+long_test[,diff_series:=value-shift(value,1),by=list(id)]
+head(long_test)
+head(dt_ts_test)
+```
+
+
+```{r}
+ggplot(long_train, aes(time,value)) + geom_line(aes(color=as.character(id))) 
+```
+
+## Representations
+
+
+PAA with segmenth length = 5
+PLA with n_important = 10
+Tree with maxdepth = 12
+
+```{r}
+#Piecewise Aggregate + Piecewise Linear Approximation + Tree
+
+
+segmentlength = 5
+n_important = 10
+
+long_train=long_train[order(id,time)]
+
+treeres <- vector('list', n_series_train)
+paares <- vector('list', n_series_train)
+
+for (i in 1:n_series_train) {
+  
+  data_plot=long_train[id==i]
+  
+  data_ts=long_train[id==i]$value
+  paa_rep=repr_paa(data_ts, segmentlength , meanC)
+  dummy_time = c(1:(length(paa_rep)-1))*segmentlength
+  dummy_time = c(dummy_time, (nrow(data_plot)))
+  dt_paa = data.table(time=dummy_time, paa_rep)
+  
+  pla_rep=repr_pla(data_ts, times = n_important, return = "points")
+  pla_rep=repr_pla(data_ts, times = n_important, return = "both")
+  setnames(pla_rep,c('places','points'),c('time','pla_rep'))
+  pla_rep$time=pla_rep$time+1
+  
+  
+  tree=rpart(value~time,data_plot,control=rpart.control(cp=0,maxdepth=12,minsplit=20,minbucket=10))
+  data_plot[,tree_rep:=predict(tree,data_plot)]
+  
+  
+  data_plot=merge(data_plot,dt_paa,by='time',all.x=T)
+  data_plot=merge(data_plot,pla_rep,by='time',all.x=T)
+  
+  data_plot[,paa_rep:=nafill(paa_rep,'nocb')]
+  data_plot[, pla_rep := na.approx(pla_rep)]
+  
+  paares[[i]]=data_plot
+
+}
+results <- rbindlist(paares) 
+
+```
+
+
+```{r}
+
+head(results)
+
+```
+
+Sample representaion for id=10
+
+```{r}
+
+selected=results[id==10]
+data_show=melt(selected,id.vars='time',measure.vars=c('value','tree_rep', 'paa_rep', 'pla_rep'))
+ggplot(data_show,aes(x=time,y=value,color=variable))+
+    geom_line()
+
+```
+
+
+## Distance Measurement
+
+Preliminary work with results dataset for future distance calculations;
+
+Euc
+Dtw (window size = 10)
+Dtw (window size = 20)
+ERP
+
+```{r}
+value_train=dcast(results[!is.na(value)],id~time,value.var='value')
+head(value_train)
+value_train=as.matrix(value_train)
+```
+
+
+```{r}
+diff_train=dcast(results[!is.na(diff_series)],id~time,value.var='diff_series')
+head(diff_train)
+diff_train=as.matrix(diff_train)
+```
+
+
+```{r}
+tree_train=dcast(results[!is.na(tree_rep)],id~time,value.var='tree_rep')
+head(tree_train)
+tree_train=as.matrix(tree_train)
+```
+
+```{r}
+paa_train=dcast(results[!is.na(paa_rep)],id~time,value.var='paa_rep')
+head(paa_train)
+paa_train=as.matrix(paa_train)
+```
+
+```{r}
+pla_train=dcast(results[!is.na(pla_rep)],id~time,value.var='pla_rep')
+head(pla_train)
+pla_train=as.matrix(pla_train)
+```
+
+```{r}
+large_number=10000
+```
+
+### Euclidian
+
+Raw, difference, tree, paa(piecewise aggregate approximation with segmenth length 5) and pla values are used. 
+
+```{r}
+# raw + euc
+dist_euc=as.matrix(dist(value_train))
+diag(dist_euc)=large_number
+fwrite(dist_euc,sprintf('%s_euc_raw_dist.csv',dist_path),col.names=F)
+
+# diif + euc
+dist_diff=as.matrix(dist(diff_train))
+diag(dist_diff)=large_number
+fwrite(dist_diff,sprintf('%s_euc_diff_dist.csv',dist_path),col.names=F)
+
+# tree + euc
+dist_tree=as.matrix(dist(tree_train))
+diag(dist_tree)=large_number
+fwrite(dist_tree,sprintf('%s_euc_tree_dist.csv',dist_path),col.names=F)
+
+# paa + euc
+dist_paa=as.matrix(dist(paa_train))
+diag(dist_paa)=large_number
+fwrite(dist_paa,sprintf('%s_euc_paa_dist.csv',dist_path),col.names=F)
+
+# pla + euc
+dist_pla=as.matrix(dist(pla_train))
+diag(dist_pla)=large_number
+fwrite(dist_pla,sprintf('%s_euc_pla_dist.csv',dist_path),col.names=F)
+
+```
+
+
+```{r}
+
+# raw + DTW(Window size = 10)
+dist_dtw=as.matrix(dtwDist(value_train, window.type='sakoechiba',window.size=10))
+diag(dist_dtw)=large_number
+fwrite(dist_dtw,sprintf('%s_dtw_raw_dist_10ws.csv',dist_path),col.names=F)
+
+# diff + DTW(Window size = 10)
+dist_dtw_diff=as.matrix(dtwDist(diff_train, window.type='sakoechiba',window.size=10))
+diag(dist_dtw_diff)=large_number
+fwrite(dist_dtw_diff,sprintf('%s_dtw_diff_dist_10ws.csv',dist_path),col.names=F)
+
+# tree + DTW(window size = 10)
+dist_dtw_tree=as.matrix(dtwDist(tree_train, window.type='sakoechiba',window.size=10))
+diag(dist_dtw_tree)=large_number
+fwrite(dist_dtw_tree,sprintf('%s_dtw_tree_dist_10ws.csv',dist_path),col.names=F)
+
+# paa + DTW(window size = 10)
+dist_dtw_paa=as.matrix(dtwDist(paa_train, window.type='sakoechiba',window.size=10))
+diag(dist_dtw_paa)=large_number
+fwrite(dist_dtw_paa,sprintf('%s_dtw_paa_dist_10ws.csv',dist_path),col.names=F)
+
+# pla + DTW(window size = 10)
+dist_dtw_pla=as.matrix(dtwDist(pla_train, window.type='sakoechiba',window.size=10))
+diag(dist_dtw_pla)=large_number
+fwrite(dist_dtw_pla,sprintf('%s_dtw_pla_dist_10ws.csv',dist_path),col.names=F)
+
+
+
+```
+
+
+```{r}
+# raw + DTW(Window size = 20)
+dist_dtw2=as.matrix(dtwDist(value_train, window.type='sakoechiba',window.size=20))
+diag(dist_dtw2)=large_number
+fwrite(dist_dtw2,sprintf('%s_dtw_raw_dist_20ws.csv',dist_path),col.names=F)
+
+# diff + DTW(Window size = 20)
+dist_dtw_diff2=as.matrix(dtwDist(diff_train, window.type='sakoechiba',window.size=20))
+diag(dist_dtw_diff2)=large_number
+fwrite(dist_dtw_diff2,sprintf('%s_dtw_diff_dist_20ws.csv',dist_path),col.names=F)
+
+# tree + DTW(window size = 20)
+dist_dtw_tree2=as.matrix(dtwDist(tree_train, window.type='sakoechiba',window.size=20))
+diag(dist_dtw_tree2)=large_number
+fwrite(dist_dtw_tree2,sprintf('%s_dtw_tree_dist_20ws.csv',dist_path),col.names=F)
+
+# paa + DTW(window size = 20)
+dist_dtw_paa2=as.matrix(dtwDist(paa_train, window.type='sakoechiba',window.size=20))
+diag(dist_dtw_paa2)=large_number
+fwrite(dist_dtw_paa2,sprintf('%s_dtw_paa_dist_20ws.csv',dist_path),col.names=F)
+
+# pla + DTW(window size = 20)
+dist_dtw_pla2=as.matrix(dtwDist(pla_train, window.type='sakoechiba',window.size=20))
+diag(dist_dtw_pla2)=large_number
+fwrite(dist_dtw_pla2,sprintf('%s_dtw_pla_dist_20ws.csv',dist_path),col.names=F)
+```
+
+```{r}
+
+# raw + ERP(g=1)
+dist_erp=TSDatabaseDistances(value_train,distance='erp',g=1)
+dist_erp=as.matrix(dist_erp)
+diag(dist_erp)=large_number
+fwrite(dist_erp,sprintf('%s_erp_raw_gap_1.csv',dist_path),col.names=F)
+
+# diff + ERP(g=1)
+dist_erp_diff=TSDatabaseDistances(diff_train,distance='erp',g=1)
+dist_erp_diff=as.matrix(dist_erp_diff)
+diag(dist_erp_diff)=large_number
+fwrite(dist_erp_diff,sprintf('%s_erp_diff_gap_1.csv',dist_path),col.names=F)
+
+# tree + ERP(g=1)
+dist_erp_tree=TSDatabaseDistances(tree_train,distance='erp',g=1)
+dist_erp_tree=as.matrix(dist_erp_tree)
+diag(dist_erp_tree)=large_number
+fwrite(dist_erp_tree,sprintf('%s_erp_tree_gap_1.csv',dist_path),col.names=F)
+
+# paa + ERP(g=1)
+dist_erp_paa=TSDatabaseDistances(paa_train,distance='erp',g=1)
+dist_erp_paa=as.matrix(dist_erp_paa)
+diag(dist_erp_paa)=large_number
+fwrite(dist_erp_paa,sprintf('%s_erp_paa_gap_1.csv',dist_path),col.names=F)
+
+# pla + ERP(g=1)
+dist_erp_pla=TSDatabaseDistances(pla_train,distance='erp',g=1)
+dist_erp_pla=as.matrix(dist_erp_pla)
+diag(dist_erp_pla)=large_number
+fwrite(dist_erp_pla,sprintf('%s_erp_pla_gap_1.csv',dist_path),col.names=F)
+
+
+```
+
+## Comparisons 
+
+```{r}
+# cv indices start here
+require(TunePareto)
+
+set.seed(13429)
+nof_rep=5
+n_fold=10
+cv_indices=generateCVRuns(trainclass, ntimes =nof_rep, nfold = n_fold, 
+                          leaveOneOut = FALSE, stratified = TRUE)
+
+str(cv_indices)
+
+dist_folder=sprintf('%s/ClassificationData/%s/distances/',current_folder,dataset)
+dist_files=list.files(dist_folder, full.names=T)
+```
+
+```{r}
+list.files(dist_folder)
+```
+
+```{r}
+k_levels=c(1,3,5)
+approach_file=list.files(dist_folder)
+result=vector('list',length(dist_files)*nof_rep*n_fold*length(k_levels))
+iter=1
+for(m in 1:length(dist_files)){ #
+    print(dist_files[m])
+    dist_mat=as.matrix(fread(dist_files[m],header=FALSE))
+    for(i in 1:nof_rep){
+        this_fold=cv_indices[[i]]
+        for(j in 1:n_fold){
+            test_indices=this_fold[[j]]
+            for(k in 1:length(k_levels)){
+                current_k=k_levels[k]
+                current_fold=nn_classify_cv(dist_mat,trainclass,test_indices,k=current_k)
+                accuracy=sum(trainclass[test_indices]==current_fold$prediction$predicted)/length(test_indices)
+                tmp=data.table(approach=approach_file[m],repid=i,foldid=j,
+                               k=current_k,acc=accuracy)
+                result[[iter]]=tmp
+                iter=iter+1
+                
+            }
+            
+        }
+    
+    }   
+    
+}
+```
+
+```{r}
+overall_results=rbindlist(result)
+summarized_results=overall_results[,list(avg_acc=mean(acc),sdev_acc=sd(acc),result_count=.N),by=list(approach,k)]
+summarized_results[order(-avg_acc)]
+
+```
+
+```{r}
+summarized_results[which.max(summarized_results$avg_acc)]
+```
+
+Dynamic Time Warping method (window size=20) with difference representation and k=5 gives best results between my trials.
+
+
+```{r}
+require(ggplot2)
+ggplot(overall_results,aes(x=paste0(approach,'+',k), y=acc)) +
+geom_boxplot()+
+coord_flip()
+```
+
+
