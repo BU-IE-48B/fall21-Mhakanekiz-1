@@ -12,14 +12,14 @@ This is my [Progress Journal website](https://bu-ie-48b.github.io/fall21-Mhakane
 
 ## Homework3
 
-ECG200 dateset: [My html file](files/HW3-ECG200.html) - [My rmd file](files/HW3-EC200.Rmd)
+ECG200 dateset: [My html file](files/HW3-ECG200.html) - [My rmd file](files/HW3-EC200.rmd)
 
-Plane dateset: [My html file](files/HW3-Plane.html) - [My rmd file](files/HW3-Plane.Rmd)
+Plane dateset: [My html file](files/HW3-Plane.html) - [My rmd file](files/HW3-Plane.rmd)
 
-SmoothSubspace dateset: [My html file](files/HW3-SmoothSubspace.html) - [My rmd file](files/HW3-SmoothSubspace.Rmd)
+SmoothSubspace dateset: [My html file](files/HW3-SmoothSubspace.html) - [My rmd file](files/HW3-SmoothSubspace.rmd)
 
-SyntheticControl dateset: [My html file](files/HW3-SyntheticControl.html) - [My rmd file](files/HW3-SyntheticControl.Rmd)
+SyntheticControl dateset: [My html file](files/HW3-SyntheticControl.html) - [My rmd file](files/HW3-SyntheticControl.rmd)
 
-Trace dateset: [My html file](files/HW3-Trace.html) - [My rmd file](files/HW3-Trace.Rmd)
+Trace dateset: [My html file](files/HW3-Trace.html) - [My rmd file](files/HW3-Trace.rmd)
 
 
