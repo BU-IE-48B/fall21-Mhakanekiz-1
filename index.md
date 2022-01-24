@@ -22,4 +22,15 @@ SyntheticControl dateset: [My html file](files/HW3-SyntheticControl.html) - [My 
 
 Trace dateset: [My html file](files/HW3-Trace.html) - [My rmd file](files/HW3-Trace.rmd)
 
+## Homework4
+
+[Here](files/HW4.html) is my Homework 4 html file
+
+[Here](files/HW4.rmd) is my Homework 4 rmd file
+
+## Project
+
+[Here](files/projectReport.html) is my Project html file
+
+[Here](files/projectReport.rmd) is my Project rmd file
 

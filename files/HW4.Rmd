@@ -1,0 +1,499 @@
+---
+title: "HW4"
+author: "Hakan Ekiz - IE48B - Fall2021"
+date: "23 Ocak 2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction 
+
+Our aim in this study is to predict production values hourly for day of d+1 in the day of d In the day of d we have values until the day of d-1. We have;
+
+DSWRF_Surface
+
+RH_2.m.above.ground
+
+TCDC_entire.atmosphere
+
+TCDC_high.cloud.layer
+
+TCDC_low.cloud.layer
+
+TCDC_middle.cloud.layer
+
+TMP_2.m.above.ground
+
+
+including 7 different variables of 25 different locations. In total, there are 175 different variable values.
+
+
+TMP: Temperature 
+
+RH: Relative humidity
+
+DSWRF: Downward shortwave radiation flux
+
+TCDC: Total cloud cover data (in terms of percentage) (at entire atmosphere,high cloud layer,lowcloud layer,middle cloud layer) 
+
+
+```{r, message=FALSE}
+require(data.table)
+require(ggplot2)
+require(repr)
+require(rpart)
+require(rpart.plot)
+require(rattle)
+require(TSrepr)
+require(TSdist)
+require(dtw)
+require(zoo)
+require(genlasso)
+require(e1071)
+require(lubridate)
+require(forecast)
+require(dplyr)
+require(MLmetrics)
+```
+
+
+```{r}
+options(repr.plot.width=15, repr.plot.height=8)
+
+current_folder=getwd()
+```
+
+
+## Data
+
+
+```{r}
+data=fread('production_with_weather_data.csv')
+head(data)
+```
+
+Data consist of date, hour, production values and other 175 variables which is explained above.
+
+```{r}
+train1=data
+train1[,trnd:=1:.N]
+train1[,mon:=as.character(month(date,label=T))]
+train1[,w_day:=as.character(wday(date,label=T))]
+
+
+head(train1)
+
+```
+
+In order to set a model we create new columns which are weekday information, month information and trend. 
+
+```{r}
+train1[,datetime:=ymd(date)+dhours(hour)]
+ggplot(train1 ,aes(x=datetime,y=production)) + geom_line()
+```
+
+```{r}
+ggplot(train1[date=='2020-10-09'] ,aes(x=datetime)) +
+        geom_line(aes(y=production,color='production'))
+```
+
+
+Plotting the overall dataset and only for 1 day. 
+
+## Base Model
+
+In the base model we only include trend, weekday, month and hour (as a factor variable instead of value) informations
+
+```{r}
+tmp=train1
+tmp=as.data.table(tmp)
+lmb=lm(production~trnd+w_day+mon+as.factor(hour),tmp)
+summary(lmb)
+
+```
+
+```{r}
+tmp[,actual:=production]
+tmp[,prediction:=predict(lmb,tmp)]
+```
+
+```{r}
+ggplot(tmp[date=='2020-10-26'] ,aes(x=datetime)) +
+        geom_line(aes(y=actual,color='real')) + 
+        geom_line(aes(y=prediction,color='predicted'))
+```
+
+In order to evaluate different models we will use mape(mean absolute percentage error values for daily basis)
+
+```{r}
+daily_series1=tmp[,list(avg_production=mean(production),avg_prediction=mean(prediction)),by=list(date)]
+mape(daily_series1$avg_prediction,daily_series1$avg_production)
+
+```
+
+## Iteration 1
+
+In the iterations we will create tree of residual values. 
+
+```{r}
+
+tmp[,residual:=actual-prediction]
+
+names(tmp)
+
+```
+
+```{r}
+
+tree1=rpart(residual~ .-date-production-trnd-actual-prediction-datetime,tmp,control=rpart.control(cp=0,maxdepth=4))
+fancyRpartPlot(tree1)
+
+```
+
+Because of the numbers are hard to read in FancyRpartPlot we will continue with different type of plotting for trees for next iterations.
+
+
+
+```{r}
+prp(tree1, type = 1, extra = 101, leaf.round = 1, fallen.leaves = TRUE,
+    varlen = 0, tweak = 1.5)
+```
+
+In the plot max asolute number is -68, so we should consider when we iterate our model. We will add decision variable values of the variables in the path of the maximum value of tree. 
+
+
+```{r}
+tmp[,dswrf39_35.25:=as.numeric(DSWRF_surface_39_35.25<589)]
+tmp[,tcdcmcl38.75_35.5:=as.numeric(TCDC_middle.cloud.layer_38.75_35.5>=1.2)]
+tmp[,dswrf38_35:=as.numeric(DSWRF_surface_38_35>=140)]
+tmp[,lesshour:=as.numeric(hour<16)]
+
+lmb2=lm(production~trnd+w_day+mon+as.factor(hour)+dswrf39_35.25:tcdcmcl38.75_35.5:dswrf38_35:lesshour,tmp)
+
+summary(lmb2)
+
+```
+
+
+```{r}
+tmp[,prediction:=predict(lmb2,tmp)]
+tmp[,residual:=actual-prediction]
+
+```
+
+```{r}
+ggplot(tmp[date=='2020-10-26'] ,aes(x=datetime)) +
+        geom_line(aes(y=actual,color='real')) + 
+        geom_line(aes(y=prediction,color='predicted'))
+```
+
+```{r}
+daily_series2=tmp[,list(avg_production=mean(production),avg_prediction=mean(prediction)),by=list(date)]
+dailyseries2 = na.omit(daily_series2) 
+
+mape(dailyseries2$avg_prediction,dailyseries2$avg_production)
+```
+
+
+## Iteration2
+
+After the new predictions and new residuals are calculated, we should repeat the previous process until we will not improve model results. 
+
+
+```{r}
+tree2=rpart(residual~ .-date-production-trnd-actual-prediction-datetime,tmp,control=rpart.control(cp=0,maxdepth=4))
+prp(tree2, type = 1, extra = 101, leaf.round = 1, fallen.leaves = TRUE,
+    varlen = 0, tweak = 1.5)
+```
+
+Max absolute value is 82 in the tree plot, so we should take into consideration this value
+
+
+```{r}
+tmp[,dswrf38.5_35.5:=as.numeric(DSWRF_surface_38.5_35.5>=542)]
+tmp[,tcdcea38.75_36:=as.numeric(TCDC_entire.atmosphere_38.75_36>=20)]
+tmp[,tcdclcl38.5_35:=as.numeric(TCDC_low.cloud.layer_38.5_35<2.8)]
+tmp[,rh2ag38.25_35.75:=as.numeric(RH_2.m.above.ground_38.25_35.75>=92)]
+
+lmb3=lm(production~trnd+w_day+mon+as.factor(hour)+dswrf39_35.25:tcdcmcl38.75_35.5:dswrf38_35:lesshour
+        +dswrf38.5_35.5:tcdcea38.75_36:tcdclcl38.5_35:rh2ag38.25_35.75,tmp)
+
+summary(lmb3)
+```
+
+```{r}
+tmp[,prediction:=predict(lmb3,tmp)]
+tmp[,residual:=actual-prediction]
+
+```
+
+```{r}
+ggplot(tmp[date=='2020-10-26'] ,aes(x=datetime)) +
+        geom_line(aes(y=actual,color='real')) + 
+        geom_line(aes(y=prediction,color='predicted'))
+```
+
+```{r}
+daily_series3=tmp[,list(avg_production=mean(production),avg_prediction=mean(prediction)),by=list(date)]
+dailyseries3 = na.omit(daily_series3) 
+mape(dailyseries3$avg_prediction,dailyseries3$avg_production)
+```
+
+
+## Iteration 3
+
+
+```{r}
+tree3=rpart(residual~ .-date-production-trnd-actual-prediction-datetime,tmp,control=rpart.control(cp=0,maxdepth=4))
+prp(tree3, type = 1, extra = 101, leaf.round = 1, fallen.leaves = TRUE,
+    varlen = 0, tweak = 1.5)
+```
+
+Max absolute value is 61 (leftmost value) in the tree plot, so we should take into consideration this value
+
+
+```{r}
+tmp[,dswrf38.5_35.5_2:=as.numeric(dswrf38.5_35.5==0)]
+tmp[,tcdclcl38.5_36:=as.numeric(TCDC_low.cloud.layer_38.5_36>=53)]
+tmp[,dswrf38_35.25:=as.numeric(DSWRF_surface_38_35.25>=0.01)]
+tmp[,hour2c:=as.numeric(hour<17)]
+
+lmb4=lm(production~trnd+w_day+mon+as.factor(hour)+dswrf39_35.25:tcdcmcl38.75_35.5:dswrf38_35:lesshour
+        +dswrf38.5_35.5:tcdcea38.75_36:tcdclcl38.5_35:rh2ag38.25_35.75
+        +dswrf38.5_35.5_2:tcdclcl38.5_36:dswrf38_35.25:hour2c,tmp)
+
+summary(lmb4)
+```
+
+```{r}
+tmp[,prediction:=predict(lmb4,tmp)]
+tmp[,residual:=actual-prediction]
+```
+
+```{r}
+ggplot(tmp[date=='2020-10-26'] ,aes(x=datetime)) +
+        geom_line(aes(y=actual,color='real')) + 
+        geom_line(aes(y=prediction,color='predicted'))
+```
+
+
+```{r}
+daily_series4=tmp[,list(avg_production=mean(production),avg_prediction=mean(prediction)),by=list(date)]
+dailyseries4 = na.omit(daily_series4) 
+mape(dailyseries4$avg_prediction,dailyseries4$avg_production)
+```
+
+## Iteration4
+
+```{r}
+tree4=rpart(residual~ .-date-production-trnd-actual-prediction-datetime,tmp,control=rpart.control(cp=0,maxdepth=4))
+prp(tree4, type = 1, extra = 101, leaf.round = 1, fallen.leaves = TRUE,
+    varlen = 0, tweak = 1.5)
+```
+
+Max absolute value is 95 in the tree plot, so we should take into consideration this value
+
+
+```{r}
+
+tmp[,dswrf38_35.75:=as.numeric(DSWRF_surface_38_35.75>=619)]
+tmp[,tcdcea38.75_35.75:=as.numeric(TCDC_entire.atmosphere_38.75_35.75<11)]
+tmp[,tcdclcl38.25_35:=as.numeric(TCDC_low.cloud.layer_38.25_35>=10)]
+tmp[,tcdcea38_35.75:=as.numeric(TCDC_entire.atmosphere_38_35.75>=21)]
+
+lmb5=lm(production~trnd+w_day+mon+as.factor(hour)+dswrf39_35.25:tcdcmcl38.75_35.5:dswrf38_35:lesshour
+        +dswrf38.5_35.5:tcdcea38.75_36:tcdclcl38.5_35:rh2ag38.25_35.75
+        +dswrf38.5_35.5_2:tcdclcl38.5_36:dswrf38_35.25:hour2c
+        +dswrf38_35.75:tcdcea38.75_35.75:tcdclcl38.25_35:tcdcea38_35.75,tmp)
+
+summary(lmb5)
+
+```
+
+```{r}
+tmp[,prediction:=predict(lmb5,tmp)]
+tmp[,residual:=actual-prediction]
+```
+
+```{r}
+ggplot(tmp[date=='2020-10-26'] ,aes(x=datetime)) +
+        geom_line(aes(y=actual,color='real')) + 
+        geom_line(aes(y=prediction,color='predicted'))
+```
+
+```{r}
+daily_series5=tmp[,list(avg_production=mean(production),avg_prediction=mean(prediction)),by=list(date)]
+dailyseries5 = na.omit(daily_series5) 
+mape(dailyseries5$avg_prediction,dailyseries5$avg_production)
+```
+
+### Iteration 5
+
+```{r}
+tree5=rpart(residual~ .-date-production-trnd-actual-prediction-datetime,tmp,control=rpart.control(cp=0,maxdepth=4))
+prp(tree5, type = 1, extra = 101, leaf.round = 1, fallen.leaves = TRUE,
+    varlen = 0, tweak = 1.5)
+```
+
+Max absolute value is 44(rightmost value) in the tree plot, so we should take into consideration this value
+
+
+```{r}
+
+tmp[,dswrf38_35.75_2:=as.numeric(DSWRF_surface_38_35.75>=619)]
+tmp[,tcdcea38.75_35.75_2:=as.numeric(TCDC_entire.atmosphere_38.75_35.75<11)]
+tmp[,mon2:=as.numeric(!mon %in% c('Ağu','Eki','Eyl','Haz','Tem'))]
+tmp[,tcdclcl38.5_35_2:=as.numeric(TCDC_low.cloud.layer_38.5_35<18)]
+
+lmb6=lm(production~trnd+w_day+mon+as.factor(hour)+dswrf39_35.25:tcdcmcl38.75_35.5:dswrf38_35:lesshour
+        +dswrf38.5_35.5:tcdcea38.75_36:tcdclcl38.5_35:rh2ag38.25_35.75
+        +dswrf38.5_35.5_2:tcdclcl38.5_36:dswrf38_35.25:hour2c
+        +dswrf38_35.75:tcdcea38.75_35.75:tcdclcl38.25_35:tcdcea38_35.75
+        +dswrf38_35.75_2:tcdcea38.75_35.75_2:mon2:tcdclcl38.5_35_2,tmp)
+
+summary(lmb6)
+
+```
+
+```{r}
+tmp[,prediction:=predict(lmb6,tmp)]
+tmp[,residual:=actual-prediction]
+```
+
+```{r}
+ggplot(tmp[date=='2020-10-26'] ,aes(x=datetime)) +
+        geom_line(aes(y=actual,color='real')) + 
+        geom_line(aes(y=prediction,color='predicted'))
+```
+
+```{r}
+daily_series6=tmp[,list(avg_production=mean(production),avg_prediction=mean(prediction)),by=list(date)]
+dailyseries6 = na.omit(daily_series6) 
+mape(dailyseries6$avg_prediction,dailyseries6$avg_production)
+```
+
+
+### Iteration6
+
+```{r}
+tree6=rpart(residual~ .-date-production-trnd-actual-prediction-datetime,tmp,control=rpart.control(cp=0,maxdepth=4))
+prp(tree6, type = 1, extra = 101, leaf.round = 1, fallen.leaves = TRUE,
+    varlen = 0, tweak = 1.5)
+```
+
+Max absolute value is 29 (rightmost) in the tree plot, so we should take into consideration this value
+
+
+```{r}
+
+tmp[,rh2ag38_36:=as.numeric(RH_2.m.above.ground_38_36<32)]
+tmp[,dswrf38.25_36:=as.numeric(DSWRF_surface_38.25_36>=601)]
+tmp[,tcdcml38_35:=as.numeric(TCDC_middle.cloud.layer_38_35<5.9)]
+tmp[,mon3:=as.numeric(!mon %in% c('Mar','May'))]
+
+lmb7=lm(production~trnd+w_day+mon+as.factor(hour)+dswrf39_35.25:tcdcmcl38.75_35.5:dswrf38_35:lesshour
+        +dswrf38.5_35.5:tcdcea38.75_36:tcdclcl38.5_35:rh2ag38.25_35.75
+        +dswrf38.5_35.5_2:tcdclcl38.5_36:dswrf38_35.25:hour2c
+        +dswrf38_35.75:tcdcea38.75_35.75:tcdclcl38.25_35:tcdcea38_35.75
+        +dswrf38_35.75_2:tcdcea38.75_35.75_2:mon2:tcdclcl38.5_35_2
+        +rh2ag38_36:dswrf38.25_36:tcdcml38_35:mon3,tmp)
+
+summary(lmb7)
+
+```
+
+```{r}
+tmp[,prediction:=predict(lmb7,tmp)]
+tmp[,residual:=actual-prediction]
+```
+
+
+
+```{r}
+daily_series7=tmp[,list(avg_production=mean(production),avg_prediction=mean(prediction)),by=list(date)]
+dailyseries7 = na.omit(daily_series7) 
+mape(dailyseries7$avg_prediction,dailyseries7$avg_production)
+```
+
+### Iteration7
+
+```{r}
+tree7=rpart(residual~ .-date-production-trnd-actual-prediction-datetime,tmp,control=rpart.control(cp=0,maxdepth=4))
+prp(tree7, type = 1, extra = 101, leaf.round = 1, fallen.leaves = TRUE,
+    varlen = 0, tweak = 1.5)
+```
+
+Max absolute value is 43 (leftmost) in the tree plot, so we should take into consideration this value
+
+
+```{r}
+tmp[,tcdcea38.5_35:=as.numeric(TCDC_entire.atmosphere_38.5_35>=37)]
+tmp[,hour3:=as.numeric(hour>=7)]
+tmp[,hour3c:=as.numeric(hour<15)]
+tmp[,dswrf38.75_35:=as.numeric(DSWRF_surface_38.75_35<240)]
+
+lmb8=lm(production~trnd+w_day+mon+as.factor(hour)+dswrf39_35.25:tcdcmcl38.75_35.5:dswrf38_35:lesshour
+        +dswrf38.5_35.5:tcdcea38.75_36:tcdclcl38.5_35:rh2ag38.25_35.75
+        +dswrf38.5_35.5_2:tcdclcl38.5_36:dswrf38_35.25:hour2c
+        +dswrf38_35.75:tcdcea38.75_35.75:tcdclcl38.25_35:tcdcea38_35.75
+        +dswrf38_35.75_2:tcdcea38.75_35.75_2:mon2:tcdclcl38.5_35_2
+        +rh2ag38_36:dswrf38.25_36:tcdcml38_35:mon3
+        +tcdcea38.5_35:hour3:hour3c:dswrf38.75_35,tmp)
+
+summary(lmb8)
+```
+
+```{r}
+tmp[,prediction:=predict(lmb8,tmp)]
+tmp[,residual:=actual-prediction]
+```
+
+
+
+```{r}
+daily_series8=tmp[,list(avg_production=mean(production),avg_prediction=mean(prediction)),by=list(date)]
+dailyseries8 = na.omit(daily_series8) 
+mape(dailyseries8$avg_prediction,dailyseries8$avg_production)
+```
+
+After all iterations, finally we have model of lmb8 which gives result of 16.84 mape result. In order to evaluate the result is good or noot we will create simple model which consist only 48 lagged values. (Because we should predict d+1 day in day d which we have values up to day d-1)
+
+
+### Model only consist of 48 lagged values
+
+
+```{r}
+tmp2=train1
+tmp2[,prod_48l:=shift(x=tmp2$production,n=48L,fill=mean(tmp2$production))]
+head(tmp2)
+```
+
+```{r}
+
+lm_l48=lm(production~prod_48l,
+                 tmp2)
+summary(lm_l48)
+
+```
+
+```{r}
+tmp2[,prediction:=predict(lm_l48,tmp2)]
+daily_seriesl48=tmp2[,list(avg_production=mean(production),avg_prediction=mean(prediction)),by=list(date)]
+dailyseriesl48 = na.omit(daily_seriesl48) 
+mape(dailyseriesl48$avg_prediction,dailyseriesl48$avg_production)
+
+```
+
+### Conclusion and Discussion
+
+With the method we used we have better results then the model which uses 48 lagged values.Since there are so many variables in this problem, how and how much we should use the variables in the model becomes an important question. We have seen that we can create much more successful models by adding the other variables step by step, conditional, by building a model with only the variables that emerge from time.
+
+
+
+
+
+
+
